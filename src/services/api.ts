@@ -19,7 +19,8 @@ class ApiService {
     }
 
     try {
-      const response = await fetch(API_BASE_URL, {
+      // First try the mobile site which has direct streaming links
+      const mobileResponse = await fetch('https://m.livetv.sx/en/', {
         method: 'GET',
         headers: {
           'Accept': 'text/html,application/xhtml+xml,application/xml',
@@ -27,32 +28,194 @@ class ApiService {
         },
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      let matches: APIMatch[] = [];
+
+      if (mobileResponse.ok) {
+        const mobileHtml = await mobileResponse.text();
+        matches = this.parseMobileHTML(mobileHtml, sport, type);
       }
 
-      const xmlText = await response.text();
-      const matches = this.parseXMLAndTransform(xmlText, sport, type);
+      // If no matches from mobile site, fallback to RSS
+      if (matches.length === 0) {
+        const rssResponse = await fetch(API_BASE_URL, {
+          method: 'GET',
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml,application/xml',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+          },
+        });
+
+        if (rssResponse.ok) {
+          const xmlText = await rssResponse.text();
+          matches = this.parseXMLAndTransform(xmlText, sport, type);
+        }
+      }
       
       // Cache the successful response
       this.cache.set(cacheKey, { data: matches, timestamp: Date.now() });
       return matches;
       
     } catch (error) {
-      console.warn('API call failed, trying with CORS proxy...', error);
+      console.warn('Primary API calls failed, trying with CORS proxy...', error);
       
       try {
-        const response = await fetch(`${PROXY_URL}${encodeURIComponent(API_BASE_URL)}`);
-        const xmlText = await response.text();
-        const matches = this.parseXMLAndTransform(xmlText, sport, type);
+        const response = await fetch(`${PROXY_URL}${encodeURIComponent('https://m.livetv.sx/en/')}`);
+        const html = await response.text();
+        const matches = this.parseMobileHTML(html, sport, type);
         
-        this.cache.set(cacheKey, { data: matches, timestamp: Date.now() });
-        return matches;
+        if (matches.length > 0) {
+          this.cache.set(cacheKey, { data: matches, timestamp: Date.now() });
+          return matches;
+        }
+
+        // Fallback to RSS via proxy
+        const rssResponse = await fetch(`${PROXY_URL}${encodeURIComponent(API_BASE_URL)}`);
+        const xmlText = await rssResponse.text();
+        const rssMatches = this.parseXMLAndTransform(xmlText, sport, type);
+        
+        this.cache.set(cacheKey, { data: rssMatches, timestamp: Date.now() });
+        return rssMatches;
       } catch (proxyError) {
-        console.warn('Proxy call also failed, using mock data...', proxyError);
+        console.warn('Proxy calls also failed, using mock data...', proxyError);
         return this.getMockData();
       }
     }
+  }
+
+  private parseMobileHTML(html: string, sport?: SportType, type?: string): APIMatch[] {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const eventItems = doc.querySelectorAll('ul.broadcasts li');
+    
+    const allMatches: APIMatch[] = [];
+    const now = Date.now();
+
+    eventItems.forEach((item, index) => {
+      const titleLink = item.querySelector('.title a');
+      const noteElement = item.querySelector('.note');
+      const logoElement = item.querySelector('.logo img');
+      
+      if (!titleLink || !noteElement) return;
+
+      const title = titleLink.textContent?.trim() || '';
+      const streamUrl = titleLink.getAttribute('href') || '';
+      const noteText = noteElement.textContent?.trim() || '';
+      const logoSrc = logoElement?.getAttribute('src') || '';
+      
+      // Extract event info from note text
+      const dateMatch = noteText.match(/(\d{1,2})\s+(\w+)\s+at\s+(\d{1,2}:\d{2})/);
+      const categoryMatch = noteText.match(/\(([^)]+)\)/);
+      const isLive = noteText.includes('Live');
+      
+      // Parse date
+      let eventTime = now;
+      if (dateMatch) {
+        const [, day, month, time] = dateMatch;
+        const currentYear = new Date().getFullYear();
+        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                           'July', 'August', 'September', 'October', 'November', 'December'];
+        const monthIndex = monthNames.findIndex(m => m.toLowerCase().startsWith(month.toLowerCase()));
+        
+        if (monthIndex !== -1) {
+          const [hours, minutes] = time.split(':').map(Number);
+          const eventDate = new Date(currentYear, monthIndex, parseInt(day), hours, minutes);
+          eventTime = eventDate.getTime();
+        }
+      }
+      
+      // Extract sport from category or logo
+      const category = this.extractSportFromMobileContent(categoryMatch?.[1] || '', logoSrc);
+      
+      // Extract teams from title
+      const teams = this.extractTeamsFromTitle(title);
+      
+      // Extract stream parameters from URL
+      const streamParams = this.extractStreamParamsFromURL(streamUrl);
+      
+      const match: APIMatch = {
+        id: `mobile-${index}`,
+        slug: this.createSlug(title),
+        title: title,
+        live: isLive,
+        category: category,
+        date: eventTime,
+        popular: ['Football', 'Basketball', 'Baseball', 'Soccer', 'Tennis'].includes(category),
+        league: categoryMatch?.[1]?.replace(/\./g, '') || 'Live Event',
+        teams: teams,
+        sources: [{
+          id: `mobile-stream-${index}`,
+          name: 'Live Stream',
+          embed: streamUrl,
+          streamParams: streamParams
+        }],
+      };
+
+      allMatches.push(match);
+    });
+
+    // Apply filters and return
+    return this.applyFilters(allMatches, sport, type);
+  }
+
+  private extractSportFromMobileContent(category: string, logoSrc: string): string {
+    const lowerCategory = category.toLowerCase();
+    const logoName = logoSrc.split('/').pop()?.toLowerCase() || '';
+    
+    if (lowerCategory.includes('football') || logoName.includes('football')) return 'Football';
+    if (lowerCategory.includes('basketball') || logoName.includes('basket')) return 'Basketball';
+    if (lowerCategory.includes('baseball') || logoName.includes('baseball')) return 'Baseball';
+    if (lowerCategory.includes('soccer') || logoName.includes('soccer')) return 'Soccer';
+    if (lowerCategory.includes('tennis') || logoName.includes('tennis') || logoName.includes('usopen')) return 'Tennis';
+    if (lowerCategory.includes('hockey') || logoName.includes('hockey')) return 'Hockey';
+    if (lowerCategory.includes('snooker') || logoName.includes('snooker')) return 'Snooker';
+    if (lowerCategory.includes('badminton') || logoName.includes('badmin')) return 'Badminton';
+    if (lowerCategory.includes('volleyball') || logoName.includes('volley')) return 'Volleyball';
+    if (lowerCategory.includes('boxing') || logoName.includes('boxing')) return 'Boxing';
+    
+    return 'Other';
+  }
+
+  private extractStreamParamsFromURL(url: string): any {
+    try {
+      const urlObj = new URL(url);
+      const params = new URLSearchParams(urlObj.search);
+      
+      return {
+        t: params.get('t') || '',
+        c: params.get('c') || '',
+        eid: params.get('eid') || '',
+        lid: params.get('lid') || '',
+        lang: params.get('lang') || 'en',
+        ci: params.get('ci') || '',
+        si: params.get('si') || ''
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  private applyFilters(matches: APIMatch[], sport?: SportType, type?: string): APIMatch[] {
+    let filteredMatches = matches;
+
+    if (sport && sport !== 'All') {
+      filteredMatches = filteredMatches.filter(match => match.category === sport);
+    }
+
+    if (type === 'live') {
+      filteredMatches = filteredMatches.filter(match => match.live);
+    } else if (type === 'today') {
+      const today = new Date().toDateString();
+      filteredMatches = filteredMatches.filter(match => 
+        new Date(match.date).toDateString() === today
+      );
+    } else if (type === 'top-today') {
+      const today = new Date().toDateString();
+      filteredMatches = filteredMatches.filter(match => 
+        new Date(match.date).toDateString() === today && match.popular
+      );
+    }
+
+    return filteredMatches.sort((a, b) => a.date - b.date);
   }
 
   private parseXMLAndTransform(xmlText: string, sport?: SportType, type?: string): APIMatch[] {
