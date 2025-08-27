@@ -79,6 +79,9 @@ class ApiService {
       // Extract teams from title
       const teams = this.extractTeamsFromTitle(title);
       
+      // Extract streaming parameters from description
+      const sources = this.extractStreamingSources(description, index);
+      
       const match: APIMatch = {
         id: `rss-${index}`,
         slug: this.createSlug(title),
@@ -89,7 +92,7 @@ class ApiService {
         popular: ['Football', 'Basketball', 'Baseball', 'Soccer'].includes(category),
         league: this.extractLeagueFromContent(description),
         teams: teams,
-        sources: [{
+        sources: sources.length > 0 ? sources : [{
           id: `${title}-${index}`,
           name: 'Live Stream',
           embed: link,
@@ -178,6 +181,84 @@ class ApiService {
     }
     
     return undefined;
+  }
+
+  private extractStreamingSources(description: string, index: number): Array<{id: string; name: string; embed: string; streamParams?: any}> {
+    const sources: Array<{id: string; name: string; embed: string; streamParams?: any}> = [];
+    
+    // Parse streaming links from description HTML
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(description, 'text/html');
+    const links = doc.querySelectorAll('a[onclick*="show_webplayer"]');
+    
+    links.forEach((link, linkIndex) => {
+      const onclick = link.getAttribute('onclick') || '';
+      const href = link.getAttribute('href') || '';
+      
+      // Extract parameters from onclick function call
+      const showWebplayerMatch = onclick.match(/show_webplayer\('([^']+)',\s*'([^']+)',\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*'([^']+)'\)/);
+      
+      if (showWebplayerMatch) {
+        const [, streamType, channelId, eventId, linkId, categoryId, sourceIndex, lang] = showWebplayerMatch;
+        
+        const streamParams = {
+          t: streamType,
+          c: channelId,
+          lang: lang,
+          eid: eventId,
+          lid: linkId,
+          ci: categoryId,
+          si: sourceIndex
+        };
+        
+        // Construct webplayer URL
+        const webplayerUrl = `https://cdn.livetv860.me/webplayer2.php?${new URLSearchParams(streamParams).toString()}`;
+        
+        sources.push({
+          id: `stream-${index}-${linkIndex}`,
+          name: link.textContent?.trim() || `Stream ${linkIndex + 1}`,
+          embed: webplayerUrl,
+          streamParams: streamParams
+        });
+      }
+    });
+    
+    return sources;
+  }
+
+  async fetchStreamData(streamParams: any): Promise<{streamUrl?: string; error?: string}> {
+    try {
+      const url = `https://cdn.livetv860.me/webplayer2.php?${new URLSearchParams(streamParams).toString()}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const html = await response.text();
+      
+      // Extract actual stream URL from webplayer response
+      // This might need adjustment based on the actual response format
+      const streamUrlMatch = html.match(/src=['"]([^'"]+)['"]/) || 
+                            html.match(/source\s+src=['"]([^'"]+)['"]/) ||
+                            html.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
+      
+      if (streamUrlMatch) {
+        return { streamUrl: streamUrlMatch[1] || streamUrlMatch[0] };
+      }
+      
+      return { error: 'Stream URL not found' };
+      
+    } catch (error) {
+      console.error('Failed to fetch stream data:', error);
+      return { error: 'Failed to fetch stream data' };
+    }
   }
 
   async fetchSports(): Promise<SportType[]> {

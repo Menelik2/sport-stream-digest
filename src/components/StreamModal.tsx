@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, ExternalLink, AlertTriangle } from 'lucide-react';
 import {
   Dialog,
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { apiService } from '@/services/api';
 
 interface StreamModalProps {
   isOpen: boolean;
@@ -20,6 +21,15 @@ interface StreamModalProps {
   sport: string;
   sourceName?: string;
   quality?: string;
+  streamParams?: {
+    t: string;
+    c: string;
+    lang: string;
+    eid: string;
+    lid: string;
+    ci: string;
+    si: string;
+  };
 }
 
 export function StreamModal({
@@ -31,9 +41,43 @@ export function StreamModal({
   sport,
   sourceName,
   quality,
+  streamParams,
 }: StreamModalProps) {
   const [iframeError, setIframeError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [actualStreamUrl, setActualStreamUrl] = useState(streamUrl);
+  const [fetchingStream, setFetchingStream] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+
+  // Fetch actual stream URL when streamParams are present
+  useEffect(() => {
+    const fetchStreamUrl = async () => {
+      if (!streamParams || !isOpen) return;
+      
+      setFetchingStream(true);
+      setStreamError(null);
+      
+      try {
+        const result = await apiService.fetchStreamData(streamParams);
+        
+        if (result.streamUrl) {
+          setActualStreamUrl(result.streamUrl);
+        } else if (result.error) {
+          setStreamError(result.error);
+          setActualStreamUrl(streamUrl); // Fallback to original URL
+        }
+      } catch (error) {
+        setStreamError('Failed to load stream');
+        setActualStreamUrl(streamUrl); // Fallback to original URL
+      } finally {
+        setFetchingStream(false);
+      }
+    };
+
+    if (isOpen) {
+      fetchStreamUrl();
+    }
+  }, [streamParams, isOpen, streamUrl]);
 
   const handleIframeLoad = () => {
     setIsLoading(false);
@@ -46,7 +90,7 @@ export function StreamModal({
   };
 
   const handleExternalOpen = () => {
-    window.open(streamUrl, '_blank', 'noopener,noreferrer');
+    window.open(actualStreamUrl, '_blank', 'noopener,noreferrer');
   };
 
   const getSportColor = (sport: string) => {
@@ -111,7 +155,38 @@ export function StreamModal({
         </DialogHeader>
 
         <div className="flex-1 relative overflow-hidden rounded-lg bg-muted/30">
-          {iframeError ? (
+          {fetchingStream ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center">
+                <div className="p-4 gradient-primary rounded-full mb-4 shadow-primary mx-auto w-fit">
+                  <div className="w-6 h-6 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                </div>
+                <p className="text-muted-foreground">Fetching stream data...</p>
+              </div>
+            </div>
+          ) : streamError ? (
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+              <Alert className="max-w-md border-destructive/50 bg-destructive/10">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  {streamError}
+                </AlertDescription>
+              </Alert>
+              
+              <div className="mt-6 space-y-4">
+                <p className="text-muted-foreground">
+                  Try using the original stream link:
+                </p>
+                <Button
+                  onClick={handleExternalOpen}
+                  className="gradient-primary shadow-primary text-primary-foreground border-0"
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Open Original Link
+                </Button>
+              </div>
+            </div>
+          ) : iframeError ? (
             <div className="h-full flex flex-col items-center justify-center p-8 text-center">
               <Alert className="max-w-md border-destructive/50 bg-destructive/10">
                 <AlertTriangle className="h-4 w-4" />
@@ -159,7 +234,7 @@ export function StreamModal({
               )}
               
               <iframe
-                src={streamUrl}
+                src={actualStreamUrl}
                 className="w-full h-full border-0"
                 allow="autoplay; fullscreen; encrypted-media"
                 allowFullScreen

@@ -20,6 +20,7 @@ export function MatchCard({ match, className }: MatchCardProps) {
     streamUrl: string;
     sourceName?: string;
     quality?: string;
+    streamParams?: any;
   }>({
     isOpen: false,
     streamUrl: '',
@@ -44,12 +45,13 @@ export function MatchCard({ match, className }: MatchCardProps) {
     return colors[sport as keyof typeof colors] || 'bg-gray-500/20 text-gray-400 border-gray-500/30';
   };
 
-  const handleStreamClick = (embedUrl: string, sourceName?: string, quality?: string) => {
+  const handleStreamClick = (embedUrl: string, sourceName?: string, quality?: string, streamParams?: any) => {
     setStreamModal({
       isOpen: true,
       streamUrl: embedUrl,
       sourceName,
       quality,
+      streamParams,
     });
   };
 
@@ -59,6 +61,7 @@ export function MatchCard({ match, className }: MatchCardProps) {
       streamUrl: '',
       sourceName: undefined,
       quality: undefined,
+      streamParams: undefined,
     });
   };
 
@@ -158,7 +161,7 @@ export function MatchCard({ match, className }: MatchCardProps) {
               {bestStreams.slice(0, 2).map((source, index) => (
                 <Button
                   key={source.id}
-                  onClick={() => handleStreamClick(source.embed, source.name, source.quality)}
+                  onClick={() => handleStreamClick(source.embed, source.name, source.quality, source.streamParams)}
                   className="flex-1 bg-red-600 hover:bg-red-700 text-white border-0 py-3 px-4 rounded-lg font-medium transition-colors duration-200 flex items-center justify-center gap-2"
                 >
                   <Play className="w-5 h-5 fill-current" />
@@ -172,7 +175,7 @@ export function MatchCard({ match, className }: MatchCardProps) {
               ))}
               {bestStreams.length > 2 && (
                 <Button
-                  onClick={() => handleStreamClick(bestStreams[2].embed, bestStreams[2].name, bestStreams[2].quality)}
+                  onClick={() => handleStreamClick(bestStreams[2].embed, bestStreams[2].name, bestStreams[2].quality, bestStreams[2].streamParams)}
                   variant="outline"
                   className="px-4 py-3 border-gray-600 text-gray-300 hover:bg-gray-800 hover:border-gray-500 rounded-lg"
                 >
@@ -193,6 +196,7 @@ export function MatchCard({ match, className }: MatchCardProps) {
         sport={match.category}
         sourceName={streamModal.sourceName}
         quality={streamModal.quality}
+        streamParams={streamModal.streamParams}
       />
     </>
   );

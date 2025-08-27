@@ -30,6 +30,15 @@ export interface APIMatch {
     id: string;
     name: string;
     embed: string;
+    streamParams?: {
+      t: string;
+      c: string;
+      lang: string;
+      eid: string;
+      lid: string;
+      ci: string;
+      si: string;
+    };
   }[];
 }
 

@@ -6,6 +6,15 @@ export interface PrioritizedSource {
   embed: string;
   quality?: string;
   priority: number;
+  streamParams?: {
+    t: string;
+    c: string;
+    lang: string;
+    eid: string;
+    lid: string;
+    ci: string;
+    si: string;
+  };
 }
 
 export function prioritizeStreams(sources: APIMatch['sources']): PrioritizedSource[] {
