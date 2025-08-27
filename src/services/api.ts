@@ -228,36 +228,14 @@ class ApiService {
 
   async fetchStreamData(streamParams: any): Promise<{streamUrl?: string; error?: string}> {
     try {
-      const url = `https://cdn.livetv860.me/webplayer2.php?${new URLSearchParams(streamParams).toString()}`;
+      // Use the iframe-optimized URL format for better embedding
+      const iframeUrl = `https://cdn.livetv860.me/export/webplayer.iframe.php?t=${streamParams.t}&c=${streamParams.c}&eid=${streamParams.eid}&lid=${streamParams.lid}&lang=${streamParams.lang}&m&dmn=`;
       
-      const response = await fetch(url, {
-        headers: {
-          'Accept': 'text/html,application/xhtml+xml,application/xml',
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const html = await response.text();
-      
-      // Extract actual stream URL from webplayer response
-      // This might need adjustment based on the actual response format
-      const streamUrlMatch = html.match(/src=['"]([^'"]+)['"]/) || 
-                            html.match(/source\s+src=['"]([^'"]+)['"]/) ||
-                            html.match(/https?:\/\/[^\s'"]+\.m3u8[^\s'"]*/);
-      
-      if (streamUrlMatch) {
-        return { streamUrl: streamUrlMatch[1] || streamUrlMatch[0] };
-      }
-      
-      return { error: 'Stream URL not found' };
+      return { streamUrl: iframeUrl };
       
     } catch (error) {
-      console.error('Failed to fetch stream data:', error);
-      return { error: 'Failed to fetch stream data' };
+      console.error('Failed to generate stream URL:', error);
+      return { error: 'Failed to generate stream URL' };
     }
   }
 
