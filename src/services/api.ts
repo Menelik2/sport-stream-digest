@@ -1,6 +1,6 @@
-import { APIMatch, RawEventsResponse, RawEvent, SportType } from '@/types/events';
+import { APIMatch, RSSItem, SportType } from '@/types/events';
 
-const API_BASE_URL = 'https://topembed.pw/api.php?format=json';
+const API_BASE_URL = 'https://cdn.livetv860.me/rss/upcoming_en.xml';
 
 // CORS proxy for handling potential CORS issues
 const PROXY_URL = 'https://api.allorigins.win/raw?url=';
@@ -22,7 +22,8 @@ class ApiService {
       const response = await fetch(API_BASE_URL, {
         method: 'GET',
         headers: {
-          'Accept': 'application/json',
+          'Accept': 'text/html,application/xhtml+xml,application/xml',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
         },
       });
 
@@ -30,8 +31,8 @@ class ApiService {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data: RawEventsResponse = await response.json();
-      const matches = this.transformEvents(data, sport, type);
+      const xmlText = await response.text();
+      const matches = this.parseXMLAndTransform(xmlText, sport, type);
       
       // Cache the successful response
       this.cache.set(cacheKey, { data: matches, timestamp: Date.now() });
@@ -42,8 +43,8 @@ class ApiService {
       
       try {
         const response = await fetch(`${PROXY_URL}${encodeURIComponent(API_BASE_URL)}`);
-        const data: RawEventsResponse = await response.json();
-        const matches = this.transformEvents(data, sport, type);
+        const xmlText = await response.text();
+        const matches = this.parseXMLAndTransform(xmlText, sport, type);
         
         this.cache.set(cacheKey, { data: matches, timestamp: Date.now() });
         return matches;
@@ -54,33 +55,48 @@ class ApiService {
     }
   }
 
-  private transformEvents(data: RawEventsResponse, sport?: SportType, type?: string): APIMatch[] {
+  private parseXMLAndTransform(xmlText: string, sport?: SportType, type?: string): APIMatch[] {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+    const items = xmlDoc.querySelectorAll('item');
+    
     const allMatches: APIMatch[] = [];
     const now = Date.now();
 
-    Object.entries(data.events || {}).forEach(([dateStr, events]) => {
-      events.forEach((event, index) => {
-        const eventTime = event.unix_timestamp * 1000; // Convert to milliseconds
-        const isLive = Math.abs(now - eventTime) < 3 * 60 * 60 * 1000; // Within 3 hours
-        
-        const match: APIMatch = {
-          id: `${dateStr}-${index}`,
-          slug: this.createSlug(event.match),
-          title: event.match,
-          live: isLive,
-          category: event.sport,
-          date: eventTime,
-          popular: ['Football', 'Basketball', 'Baseball', 'Soccer'].includes(event.sport),
-          league: event.tournament,
-          sources: event.channels.map((channel, idx) => ({
-            id: `${event.match}-${idx}`,
-            name: this.extractChannelName(channel),
-            embed: channel,
-          })),
-        };
+    items.forEach((item, index) => {
+      const title = item.querySelector('title')?.textContent || '';
+      const description = item.querySelector('description')?.textContent || '';
+      const pubDate = item.querySelector('pubDate')?.textContent || '';
+      const link = item.querySelector('link')?.textContent || '';
+      
+      // Parse the date
+      const eventTime = pubDate ? new Date(pubDate).getTime() : now;
+      const isLive = Math.abs(now - eventTime) < 3 * 60 * 60 * 1000; // Within 3 hours
+      
+      // Extract sport/category from description or title
+      const category = this.extractSportFromContent(title + ' ' + description);
+      
+      // Extract teams from title
+      const teams = this.extractTeamsFromTitle(title);
+      
+      const match: APIMatch = {
+        id: `rss-${index}`,
+        slug: this.createSlug(title),
+        title: title,
+        live: isLive,
+        category: category,
+        date: eventTime,
+        popular: ['Football', 'Basketball', 'Baseball', 'Soccer'].includes(category),
+        league: this.extractLeagueFromContent(description),
+        teams: teams,
+        sources: [{
+          id: `${title}-${index}`,
+          name: 'Live Stream',
+          embed: link,
+        }],
+      };
 
-        allMatches.push(match);
-      });
+      allMatches.push(match);
     });
 
     // Apply filters
@@ -114,12 +130,54 @@ class ApiService {
       .trim();
   }
 
-  private extractChannelName(channelUrl: string): string {
-    const match = channelUrl.match(/\/channel\/([^\/]+)/);
-    if (match) {
-      return match[1].replace(/\[.*?\]/g, '').trim() || 'Stream';
+  private extractSportFromContent(content: string): string {
+    const lowerContent = content.toLowerCase();
+    
+    if (lowerContent.includes('football') || lowerContent.includes('nfl')) return 'Football';
+    if (lowerContent.includes('basketball') || lowerContent.includes('nba')) return 'Basketball';
+    if (lowerContent.includes('baseball') || lowerContent.includes('mlb')) return 'Baseball';
+    if (lowerContent.includes('soccer') || lowerContent.includes('fifa')) return 'Soccer';
+    if (lowerContent.includes('tennis')) return 'Tennis';
+    if (lowerContent.includes('hockey') || lowerContent.includes('nhl')) return 'Hockey';
+    if (lowerContent.includes('softball')) return 'Softball';
+    
+    return 'Other';
+  }
+
+  private extractLeagueFromContent(content: string): string {
+    const lowerContent = content.toLowerCase();
+    
+    if (lowerContent.includes('nfl')) return 'NFL';
+    if (lowerContent.includes('nba')) return 'NBA';
+    if (lowerContent.includes('mlb')) return 'MLB';
+    if (lowerContent.includes('nhl')) return 'NHL';
+    if (lowerContent.includes('fifa')) return 'FIFA';
+    if (lowerContent.includes('atp')) return 'ATP';
+    
+    // Try to extract league from parentheses or brackets
+    const leagueMatch = content.match(/\(([^)]+)\)|\[([^\]]+)\]/);
+    if (leagueMatch) {
+      return leagueMatch[1] || leagueMatch[2] || 'Live Event';
     }
-    return 'Stream';
+    
+    return 'Live Event';
+  }
+
+  private extractTeamsFromTitle(title: string): { home?: { name: string; badge: string }; away?: { name: string; badge: string } } | undefined {
+    // Common separators for team names
+    const separators = [' vs ', ' v ', ' @ ', ' - '];
+    
+    for (const separator of separators) {
+      if (title.includes(separator)) {
+        const [away, home] = title.split(separator).map(team => team.trim());
+        return {
+          home: { name: home, badge: '/logos/default.png' },
+          away: { name: away, badge: '/logos/default.png' }
+        };
+      }
+    }
+    
+    return undefined;
   }
 
   async fetchSports(): Promise<SportType[]> {

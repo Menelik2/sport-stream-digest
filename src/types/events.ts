@@ -1,16 +1,9 @@
-// Raw API response from topembed.pw
-export interface RawEvent {
-  unix_timestamp: number;
-  sport: string;
-  tournament: string;
-  match: string;
-  channels: string[];
-}
-
-export interface RawEventsResponse {
-  events: {
-    [date: string]: RawEvent[];
-  };
+// RSS XML response structure
+export interface RSSItem {
+  title: string;
+  description: string;
+  pubDate: string;
+  link: string;
 }
 
 // Transformed interface for internal use
